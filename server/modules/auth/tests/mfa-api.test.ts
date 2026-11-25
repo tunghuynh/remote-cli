@@ -130,7 +130,8 @@ test('T-08/T-10/K-24: password change and disabling MFA preserve this session an
     const { store } = getSessionRuntime();
     const other = store.create(1, '', Date.now());
     getConnection().prepare('UPDATE auth_sessions SET locked_at=1 WHERE id=?').run(other.session.id);
-    assert.equal((await request(base, '/auth/mfa/disable', {}, a)).status, 200);
+    t.mock.timers.tick(30_000);
+    assert.equal((await request(base, '/auth/mfa/disable', { password: 'synthetic-new-owner-password', code: otp(e.secret) }, a)).status, 200);
     assert.equal(store.authenticate(other.secret), null);
     assert.equal((await request(base, '/private', undefined, a)).status, 200);
     const newLogin = await request(base, '/auth/login', { username: 'alice', password: 'synthetic-new-owner-password' });
@@ -278,5 +279,88 @@ test('TH-02: fifth reauth response survives revoking its own HTTP connection', a
     for(let n=0;n<4;n++) assert.equal((await request(base,'/auth/mfa/reauth',{code:'bad'},a)).status,403);
     const last=await request(base,'/auth/mfa/reauth',{code:'bad'},a);
     assert.equal(last.status,401);assert.equal(last.headers.get('X-Auth-Error'),'mfa-attempts-exceeded');
+  });
+});
+
+
+const totpRow = () => getConnection().prepare('SELECT enabled, seed_sealed, last_used_step FROM auth_totp WHERE user_id = 1').get() as { enabled: number; seed_sealed: Buffer | null };
+const recoveryRows = () => getConnection().prepare('SELECT code_hash FROM auth_recovery_codes WHERE user_id = 1 ORDER BY code_hash').all();
+
+for (const path of ['/auth/mfa/recovery-codes', '/auth/mfa/disable'] as const) {
+  test(`MR-01/MR-02/MR-04/MR-07: ${path} needs the password, a recent verification and a new authenticator code`, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: 1_700_000_000_000 });
+    await fixture(async base => {
+      const cookie = cookieOf(await login(base))!; const e = await enroll(base, cookie);
+      const before = { totp: totpRow(), codes: recoveryRows() };
+      const unchanged = () => { assert.deepEqual(totpRow().enabled, 1); assert.deepEqual(recoveryRows(), before.codes); };
+      t.mock.timers.tick(30_000);
+      const refuse = async (body: unknown, code: string) => {
+        const response = await request(base, path, body, cookie);
+        assert.equal(response.status, 403, JSON.stringify(body)); assert.equal((await response.json()).code, code); unchanged();
+      };
+      // (a) missing or wrong password, even with a valid code; the code is not consumed.
+      await refuse({ code: otp(e.secret) }, 'AUTH_INVALID_CREDENTIALS');
+      await refuse({ password: 'wrong-password', code: otp(e.secret) }, 'AUTH_INVALID_CREDENTIALS');
+      // (b) missing or wrong code.
+      await refuse({ password }, 'MFA_CODE_INVALID');
+      await refuse({ password, code: '000000' }, 'MFA_CODE_INVALID');
+      // (f) a recovery code is not an authenticator code.
+      await refuse({ password, code: e.recoveryCodes[0] }, 'MFA_CODE_INVALID');
+      // (c) a code already used by /mfa/reauth in this step is a replay.
+      t.mock.timers.tick(30_000);
+      const used = otp(e.secret);
+      assert.equal((await request(base, '/auth/mfa/reauth', { code: used }, cookie)).status, 200);
+      await refuse({ password, code: used }, 'MFA_CODE_INVALID');
+      // (d) outside the ten-minute window, before the code is checked.
+      t.mock.timers.tick(600_000);
+      await refuse({ password, code: otp(e.secret) }, 'MFA_REAUTH_REQUIRED');
+      assert.equal((await request(base, '/auth/mfa/reauth', { code: otp(e.secret) }, cookie)).status, 200);
+      // (g)/(h) all three conditions met.
+      t.mock.timers.tick(30_000);
+      const response = await request(base, path, { password, code: otp(e.secret) }, cookie);
+      assert.equal(response.status, 200);
+      if (path === '/auth/mfa/recovery-codes') {
+        const { recoveryCodes } = await response.json() as { recoveryCodes: string[] };
+        assert.equal(recoveryCodes.length, 10);
+        assert.notDeepEqual(recoveryRows(), before.codes);
+        t.mock.timers.tick(30_000);
+        const old = await request(base, '/auth/mfa/verify', { challenge: (await (await login(base)).json()).challenge, code: e.recoveryCodes[1], recovery: true });
+        assert.equal(old.status, 403, 'an old recovery code no longer signs in');
+        const fresh = await request(base, '/auth/mfa/verify', { challenge: (await (await login(base)).json()).challenge, code: recoveryCodes[0], recovery: true });
+        assert.equal(fresh.status, 200);
+      } else {
+        assert.deepEqual(await response.json(), { enabled: false });
+        assert.equal(totpRow().enabled, 0); assert.equal(totpRow().seed_sealed, null); assert.equal(recoveryRows().length, 0);
+      }
+    });
+  });
+
+  test(`MR-03/MR-07: ${path} refuses a session signed in with a recovery code`, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: 1_700_000_000_000 });
+    await fixture(async base => {
+      const e = await enroll(base, cookieOf(await login(base))!);
+      const challenge = (await (await login(base)).json()).challenge;
+      const recovered = cookieOf(await request(base, '/auth/mfa/verify', { challenge, code: e.recoveryCodes[0], recovery: true }))!;
+      t.mock.timers.tick(30_000);
+      const response = await request(base, path, { password, code: otp(e.secret) }, recovered);
+      assert.equal(response.status, 403); assert.equal((await response.json()).code, 'MFA_REAUTH_REQUIRED');
+      assert.equal(totpRow().enabled, 1);
+    });
+  });
+}
+
+test('MR-04: wrong codes on a weakening action share the session attempt limit and end the session', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_700_000_000_000 });
+  await fixture(async base => {
+    const cookie = cookieOf(await login(base))!; await enroll(base, cookie);
+    for (let n = 1; n <= 4; n++) {
+      const response = await request(base, n % 2 ? '/auth/mfa/disable' : '/auth/mfa/recovery-codes', { password, code: '000000' }, cookie);
+      assert.equal(response.status, 403); assert.equal((await response.json()).details.attemptsRemaining, 5 - n);
+    }
+    const last = await request(base, '/auth/mfa/disable', { password, code: '000000' }, cookie);
+    assert.equal(last.status, 401); assert.equal((await last.json()).code, 'MFA_SESSION_REVOKED');
+    assert.equal(last.headers.get('X-Auth-Error'), 'mfa-attempts-exceeded');
+    assert.equal((await request(base, '/private', undefined, cookie)).status, 401);
+    assert.equal(totpRow().enabled, 1);
   });
 });

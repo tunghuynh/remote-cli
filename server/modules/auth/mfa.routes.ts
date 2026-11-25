@@ -43,6 +43,20 @@ export function createMfaRouter(verifyPassword: (id: number, password: string, i
       throw new AppError('Please sign in again', { code: 'AUTH_TOKEN_INVALID', statusCode: 401 });
     }
   };
+  /**
+   * Replacing recovery codes and disabling TOTP weaken the second factor, so the recent-verification
+   * window alone is not enough: the request itself must carry the password and a new authenticator code.
+   * A recovery code is never accepted here, and the code goes through the same replay guard and
+   * per-session attempt counter as /mfa/reauth.
+   */
+  const stepUp = async (req: AuthRequest, id: number, session: AuthSession) => {
+    if (!getMfaStore().enabled(id)) throw new AppError('Enable TOTP first', { code: 'MFA_DISABLED', statusCode: 409 });
+    await passwordCheck(req, id);
+    requireRecentMfa(id, session);
+    // A fifth wrong code revokes this session; keep this response deliverable when that closes its connections.
+    req.releaseAuthConnection?.();
+    getMfaStore().verifySessionTotp(id, session.id, req.body?.code, getSessionRuntime().store);
+  };
   router.post('/mfa/verify', handle((req, res) => {
     const { userId, verifiedAt } = getMfaStore().completeLogin(req.body?.challenge, req.body?.code, req.body?.recovery === true);
     const user = userDb.getUserById(userId);
@@ -81,19 +95,18 @@ export function createMfaRouter(verifyPassword: (id: number, password: string, i
     getSessionRuntime().store.markMfa(session.id, verifiedAt);
     res.json({ success: true, verifiedAt });
   }));
-  router.post('/mfa/disable', authenticate, handle((req, res) => {
+  router.post('/mfa/disable', authenticate, handle(async (req, res) => {
     const { user, session } = credentials(req);
-    requireRecentMfa(user.id, session);
+    await stepUp(req, user.id, session);
     getMfaStore().disable(user.id);
     const { store } = getSessionRuntime();
     store.markMfa(session.id, null);
     store.revokeAll(user.id, session.id);
     res.json({ enabled: false });
   }));
-  router.post('/mfa/recovery-codes', authenticate, handle((req, res) => {
+  router.post('/mfa/recovery-codes', authenticate, handle(async (req, res) => {
     const { user, session } = credentials(req);
-    if (!getMfaStore().enabled(user.id)) throw new AppError('Enable TOTP first', { code: 'MFA_DISABLED', statusCode: 409 });
-    requireRecentMfa(user.id, session);
+    await stepUp(req, user.id, session);
     res.json({ recoveryCodes: getMfaStore().regenerateRecovery(user.id) });
   }));
   router.post('/password', authenticate, handle(async (req, res) => {
