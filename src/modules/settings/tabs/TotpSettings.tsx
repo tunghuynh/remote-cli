@@ -4,11 +4,19 @@ import QRCode from 'qrcode';
 
 import { MFA_STATUS_CHANGED_EVENT } from '@/modules/auth';
 import SessionLockSettings from '@/modules/settings/tabs/SessionLockSettings';
+import TotpStepUpDialog from '@/modules/settings/tabs/TotpStepUpDialog';
 import { api, readApiJson, ApiRequestError } from '@/shared/api';
+import { requestMfaReauth } from '@/shared/authToken';
 import { Button, Input } from '@/shared/ui';
 import { isTargetMode } from '@/shared/transport/target-context';
 
 type Enrollment = { secret: string; uri: string; expiresAt: number };
+type StepUpAction = 'recovery' | 'disable';
+/**
+ * The server keeps a verification for 10 minutes; treating it as stale a minute early leaves time to type the
+ * password and code, so the server does not ask for a second verification of a request that carries a code.
+ */
+const STEP_UP_FRESH_MS = 9 * 60 * 1000;
 function EnrollmentQr({ uri }: { uri: string }) {
   const { t } = useTranslation('auth');
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -36,6 +44,7 @@ export default function TotpSettings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [stepUp, setStepUp] = useState<{ action: StepUpAction; opener: HTMLElement } | null>(null);
   useEffect(() => {
     if (isTargetMode()) return;
     let active = true;
@@ -49,6 +58,21 @@ export default function TotpSettings() {
     setBusy(true); setError(''); setNotice('');
     try { await fn(); } catch (error) { if (!(error instanceof ApiRequestError && error.code === 'MFA_REAUTH_CANCELLED')) setError(t('security.failed')); }
     finally { setBusy(false); }
+  };
+  // The weakening request needs a recent verification and a new code; verify first so the code in the dialog is not spent twice.
+  const openStepUp = (action: StepUpAction, opener: HTMLElement) => void run(async () => {
+    const { verifiedAt } = await readApiJson<{ verifiedAt: number | null }>(await api.auth.mfaStatus());
+    const fresh = typeof verifiedAt === 'number' && verifiedAt > 0 && Date.now() - verifiedAt < STEP_UP_FRESH_MS;
+    if (!fresh && !await requestMfaReauth()) return;
+    setStepUp({ action, opener });
+  });
+  const submitStepUp = async (password: string, code: string) => {
+    if (stepUp?.action === 'recovery') {
+      const result = await readApiJson<{ recoveryCodes: string[] }>(await api.auth.mfaRecoveryCodes(password, code)); setCodes(result.recoveryCodes);
+      return;
+    }
+    await readApiJson(await api.auth.mfaDisable(password, code)); setEnabled(false); window.dispatchEvent(new Event(MFA_STATUS_CHANGED_EVENT)); setCodes([]); setEnrollment(null);
+    setNotice(t('security.disabledNotice'));
   };
   return <section className="space-y-4 rounded-xl border border-border p-4" aria-labelledby="totp-title">
     <h2 id="totp-title" className="text-lg font-semibold">{t('security.title')}</h2>
@@ -82,14 +106,12 @@ export default function TotpSettings() {
     </form>}
     {enabled && <SessionLockSettings />}
     {enabled && <div className="flex flex-wrap gap-2">
-      <Button variant="outline" disabled={busy} onClick={() => void run(async () => {
-        const result = await readApiJson<{ recoveryCodes: string[] }>(await api.auth.mfaRecoveryCodes()); setCodes(result.recoveryCodes);
-      })}>{t('security.replaceRecovery')}</Button>
-      <Button variant="destructive" disabled={busy} onClick={() => void run(async () => {
-        await readApiJson(await api.auth.mfaDisable()); setEnabled(false); window.dispatchEvent(new Event(MFA_STATUS_CHANGED_EVENT)); setCodes([]); setEnrollment(null);
-        setNotice(t('security.disabledNotice'));
-      })}>{t('security.disableTotp')}</Button>
+      <Button variant="outline" disabled={busy} onClick={(e) => openStepUp('recovery', e.currentTarget)}>{t('security.replaceRecovery')}</Button>
+      <Button variant="destructive" disabled={busy} onClick={(e) => openStepUp('disable', e.currentTarget)}>{t('security.disableTotp')}</Button>
     </div>}
+    {stepUp && <TotpStepUpDialog title={stepUp.action === 'recovery' ? t('security.replaceRecovery') : t('security.disableTotp')}
+      confirmLabel={stepUp.action === 'recovery' ? t('security.replaceRecovery') : t('security.disableTotp')}
+      submit={submitStepUp} onClose={() => setStepUp(null)} returnFocusTo={stepUp.opener} />}
     <form className="space-y-3 border-t pt-4" onSubmit={(e) => { e.preventDefault(); void run(async () => {
       const old = currentPassword, next = newPassword; setCurrentPassword(''); setNewPassword('');
       await readApiJson(await api.auth.changePassword(old, next));
