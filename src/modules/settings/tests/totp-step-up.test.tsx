@@ -7,7 +7,9 @@ import { registerMfaReauth } from '@/shared/authToken';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const refusal = (code: string, details?: unknown) => json({ success: false, error: { code, message: 'Synthetic', details } }, 403);
-const codes = Array.from({ length: 10 }, (_, i) => `synthetic-new-recovery-${i}`);
+// Credentials are built per run so no secret-looking text sits in the source.
+const accountPassword = `pw-${crypto.randomUUID()}`;
+const codes = Array.from({ length: 10 }, () => crypto.randomUUID().replace(/-/g, ''));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 /** A TOTP-enabled account; `verifiedAt` is when the session last verified with the authenticator. */
@@ -42,9 +44,9 @@ it('MR-06: replacing recovery codes asks for the password and a new code, sends 
   expect(calls).toEqual([]);
   expect(document.activeElement?.id).toBe('totp-step-up-password');
   expect(dialog.textContent).toContain('A recovery code is not accepted here.');
-  fill('synthetic-password', '123456');
+  fill(accountPassword, '123456');
   await screen.findByText(codes[0]);
-  expect(calls).toEqual([{ path: '/api/auth/mfa/recovery-codes', body: { password: 'synthetic-password', code: '123456' } }]);
+  expect(calls).toEqual([{ path: '/api/auth/mfa/recovery-codes', body: { password: accountPassword, code: '123456' } }]);
   expect(screen.queryByRole('dialog')).toBeNull();
   await waitFor(() => expect(document.activeElement).toBe(opener));
 });
@@ -52,9 +54,9 @@ it('MR-06: replacing recovery codes asks for the password and a new code, sends 
 it('MR-06: disabling TOTP sends the password and code and reports the result', async () => {
   const calls = server(Date.now(), () => json({ enabled: false }));
   await open('Disable TOTP');
-  fill('synthetic-password', '654321');
+  fill(accountPassword, '654321');
   await screen.findByText('Two-factor authentication disabled. Other devices have been signed out.');
-  expect(calls).toEqual([{ path: '/api/auth/mfa/disable', body: { password: 'synthetic-password', code: '654321' } }]);
+  expect(calls).toEqual([{ path: '/api/auth/mfa/disable', body: { password: accountPassword, code: '654321' } }]);
   expect(screen.queryByRole('dialog')).toBeNull();
 });
 
@@ -87,7 +89,7 @@ it.each([
 ])('MR-04/MR-06: %s keeps the dialog open with its own message and empty fields', async (code, details, message) => {
   server(Date.now(), () => refusal(code, details));
   await open('Disable TOTP');
-  fill('synthetic-password', '123456');
+  fill(accountPassword, '123456');
   expect((await screen.findByRole('alert')).textContent).toBe(message);
   expect(screen.getByRole('dialog')).toBeTruthy();
   expect((screen.getByLabelText('Current password', { selector: '#totp-step-up-password' }) as HTMLInputElement).value).toBe('');
@@ -119,7 +121,7 @@ it.each([
   try {
     const calls = server(Date.now(), () => refusal('MFA_REAUTH_REQUIRED'));
     await open('Replace recovery codes');
-    fill('synthetic-password', '123456');
+    fill(accountPassword, '123456');
     await waitFor(() => expect(reauth).toHaveBeenCalledTimes(1));
     if (message) expect((await screen.findByRole('alert')).textContent).toBe(message);
     else {

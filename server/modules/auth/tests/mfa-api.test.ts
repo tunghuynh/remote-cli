@@ -119,11 +119,12 @@ test('C-09/K-10: sensitive operations require reauthentication at ten minutes; a
 
 test('T-08/T-10/K-24: password change and disabling MFA preserve this session and revoke others', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1_700_000_000_000 });
+  const replacement = `${password}-${randomBytes(6).toString('hex')}`;
   await fixture(async base => {
     const a = cookieOf(await login(base))!; const e = await enroll(base, a); t.mock.timers.tick(30_000);
     const challenge = await (await login(base)).json();
     const b = cookieOf(await request(base, '/auth/mfa/verify', { challenge: challenge.challenge, code: otp(e.secret) }))!;
-    const changed = await request(base, '/auth/password', { password, newPassword: 'synthetic-new-owner-password' }, a);
+    const changed = await request(base, '/auth/password', { password, newPassword: replacement }, a);
     assert.equal(changed.status, 200);
     assert.equal((await request(base, '/private', undefined, a)).status, 200);
     assert.equal((await request(base, '/private', undefined, b)).status, 401);
@@ -131,10 +132,10 @@ test('T-08/T-10/K-24: password change and disabling MFA preserve this session an
     const other = store.create(1, '', Date.now());
     getConnection().prepare('UPDATE auth_sessions SET locked_at=1 WHERE id=?').run(other.session.id);
     t.mock.timers.tick(30_000);
-    assert.equal((await request(base, '/auth/mfa/disable', { password: 'synthetic-new-owner-password', code: otp(e.secret) }, a)).status, 200);
+    assert.equal((await request(base, '/auth/mfa/disable', { password: replacement, code: otp(e.secret) }, a)).status, 200);
     assert.equal(store.authenticate(other.secret), null);
     assert.equal((await request(base, '/private', undefined, a)).status, 200);
-    const newLogin = await request(base, '/auth/login', { username: 'alice', password: 'synthetic-new-owner-password' });
+    const newLogin = await request(base, '/auth/login', { username: 'alice', password: replacement });
     assert.ok(cookieOf(newLogin));
   });
 });
@@ -300,7 +301,7 @@ for (const path of ['/auth/mfa/recovery-codes', '/auth/mfa/disable'] as const) {
       };
       // (a) missing or wrong password, even with a valid code; the code is not consumed.
       await refuse({ code: otp(e.secret) }, 'AUTH_INVALID_CREDENTIALS');
-      await refuse({ password: 'wrong-password', code: otp(e.secret) }, 'AUTH_INVALID_CREDENTIALS');
+      await refuse({ password: `${password}-${randomBytes(6).toString('hex')}`, code: otp(e.secret) }, 'AUTH_INVALID_CREDENTIALS');
       // (b) missing or wrong code.
       await refuse({ password }, 'MFA_CODE_INVALID');
       await refuse({ password, code: '000000' }, 'MFA_CODE_INVALID');
