@@ -243,6 +243,11 @@ export function createSessionStore(db: Database, now: () => number = () => Date.
       activity.set(id, at);
       return true;
     },
+    /** Records an account security change against the session that made it. */
+    recordEvent(id: string, kind: 'recovery-codes-replaced' | 'mfa-disabled') {
+      const session = read(id);
+      if (session) event(session, kind, now());
+    },
     resetMfaAttempts(id: string) {
       db.prepare('DELETE FROM auth_session_mfa_attempts WHERE session_id=?').run(id);
     },

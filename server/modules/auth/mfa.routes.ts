@@ -100,6 +100,7 @@ export function createMfaRouter(verifyPassword: (id: number, password: string, i
     await stepUp(req, user.id, session);
     getMfaStore().disable(user.id);
     const { store } = getSessionRuntime();
+    store.recordEvent(session.id, 'mfa-disabled');
     store.markMfa(session.id, null);
     store.revokeAll(user.id, session.id);
     res.json({ enabled: false });
@@ -107,7 +108,9 @@ export function createMfaRouter(verifyPassword: (id: number, password: string, i
   router.post('/mfa/recovery-codes', authenticate, handle(async (req, res) => {
     const { user, session } = credentials(req);
     await stepUp(req, user.id, session);
-    res.json({ recoveryCodes: getMfaStore().regenerateRecovery(user.id) });
+    const recoveryCodes = getMfaStore().regenerateRecovery(user.id);
+    getSessionRuntime().store.recordEvent(session.id, 'recovery-codes-replaced');
+    res.json({ recoveryCodes });
   }));
   router.post('/password', authenticate, handle(async (req, res) => {
     const { user, session } = credentials(req);

@@ -364,3 +364,18 @@ test('MR-04: wrong codes on a weakening action share the session attempt limit a
     assert.equal(totpRow().enabled, 1);
   });
 });
+
+test('MR-05/MR-07: replacing recovery codes and disabling TOTP are recorded as session events', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_700_000_000_000 });
+  await fixture(async base => {
+    const cookie = cookieOf(await login(base))!; const e = await enroll(base, cookie);
+    const events = () => getConnection().prepare("SELECT kind FROM auth_events WHERE kind IN ('recovery-codes-replaced', 'mfa-disabled') ORDER BY id").all();
+    t.mock.timers.tick(30_000);
+    assert.equal((await request(base, '/auth/mfa/recovery-codes', { password, code: '000000' }, cookie)).status, 403);
+    assert.deepEqual(events(), [], 'a refused request records nothing');
+    assert.equal((await request(base, '/auth/mfa/recovery-codes', { password, code: otp(e.secret) }, cookie)).status, 200);
+    t.mock.timers.tick(30_000);
+    assert.equal((await request(base, '/auth/mfa/disable', { password, code: otp(e.secret) }, cookie)).status, 200);
+    assert.deepEqual(events(), [{ kind: 'recovery-codes-replaced' }, { kind: 'mfa-disabled' }]);
+  });
+});
