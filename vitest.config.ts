@@ -22,6 +22,9 @@ export default defineConfig({
     env: {
       VITE_IS_PLATFORM: 'false',
     },
+    // Worker threads start faster than forked processes; every file still gets its own isolated
+    // module graph, which the suite needs (a shared graph fails hundreds of cases).
+    pool: 'threads',
     setupFiles: ['./vitest.setup.ts'],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     restoreMocks: true,

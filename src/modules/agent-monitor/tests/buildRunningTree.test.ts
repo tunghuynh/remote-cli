@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 
 import { buildRunningTree, folderKey, type BuildRunningTreeInput } from '@/modules/agent-monitor/running/buildRunningTree';

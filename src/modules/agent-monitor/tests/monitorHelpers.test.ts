@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 
 import { formatBytes, formatClock, formatPercent, formatTokenCount } from '@/modules/agent-monitor/format/monitorFormat';

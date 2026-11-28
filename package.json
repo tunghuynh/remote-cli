@@ -45,7 +45,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
     "typecheck:relay": "npm --prefix relay run typecheck",
-    "test": "tsx --tsconfig server/tsconfig.json --test \"server/**/*.test.ts\" \"server/**/*.test.js\"",
+    "test": "tsx --tsconfig server/tsconfig.json --test --test-timeout=60000 \"server/**/*.test.ts\" \"server/**/*.test.js\"",
     "test:client": "vitest run",
     "test:relay": "npm --prefix relay test",
     "test:e2e-remote": "tsx --tsconfig server/tsconfig.json --test \"tests/e2e-remote/**/*.test.ts\"",

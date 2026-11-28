@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { expect, test } from 'vitest';
 
 import { i18n } from '@/modules/i18n';

@@ -31,34 +31,18 @@ test('no stored entry yields the defaults', () => {
   assert.deepEqual(readStoredQuickSettingsPanelState(), { pinned: false, tab: 'settings' });
 });
 
-test('a stored pin and tab are read back', () => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ pinned: true, tab: 'commands' }));
-
-  assert.deepEqual(readStoredQuickSettingsPanelState(), { pinned: true, tab: 'commands' });
-});
-
-test('corrupt JSON falls back to the defaults', () => {
-  localStorage.setItem(STORAGE_KEY, '{not json');
-
-  assert.deepEqual(readStoredQuickSettingsPanelState(), { pinned: false, tab: 'settings' });
-});
-
-test('a non-object entry falls back to the defaults', () => {
-  localStorage.setItem(STORAGE_KEY, 'null');
-
-  assert.deepEqual(readStoredQuickSettingsPanelState(), { pinned: false, tab: 'settings' });
-});
-
-test('an unknown tab is ignored while a valid pin is kept', () => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ pinned: true, tab: 'plugins' }));
-
-  assert.deepEqual(readStoredQuickSettingsPanelState(), { pinned: true, tab: 'settings' });
-});
-
-test('a non-boolean pin is treated as unpinned', () => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ pinned: 'yes', tab: 'commands' }));
-
-  assert.deepEqual(readStoredQuickSettingsPanelState(), { pinned: false, tab: 'commands' });
+test('the stored panel state is read back, and anything invalid falls back to the defaults', () => {
+  const rows: Array<[string, string, Omit<QuickSettingsPanelState, 'isOpen'>]> = [
+    ['a stored pin and tab are read back', JSON.stringify({ pinned: true, tab: 'commands' }), { pinned: true, tab: 'commands' }],
+    ['corrupt JSON falls back to the defaults', '{not json', { pinned: false, tab: 'settings' }],
+    ['a non-object entry falls back to the defaults', 'null', { pinned: false, tab: 'settings' }],
+    ['an unknown tab is ignored while a valid pin is kept', JSON.stringify({ pinned: true, tab: 'plugins' }), { pinned: true, tab: 'settings' }],
+    ['a non-boolean pin is treated as unpinned', JSON.stringify({ pinned: 'yes', tab: 'commands' }), { pinned: false, tab: 'commands' }],
+  ];
+  for (const [label, stored, expected] of rows) {
+    localStorage.setItem(STORAGE_KEY, stored);
+    assert.deepEqual(readStoredQuickSettingsPanelState(), expected, label);
+  }
 });
 
 test('toggle opens and closes an unpinned panel', () => {
