@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 
 import { NO_SAVED_POSITIONS, placeNodes, pruneSavedPositions, recordPositions, type SavedPositions } from '@/modules/agent-monitor/graph/nodePositions';

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import assert from 'node:assert/strict';
 
 import { test } from 'vitest';
@@ -35,19 +36,15 @@ const transcript: ChatMessage[] = [
   message('finally we talked about deployment pipelines', '2024-01-01T10:10:00.000Z'),
 ];
 
-test('a snippet matches the message that contains it', () => {
-  const index = findSearchTargetIndex(transcript, { snippet: 'caching strategies' });
-  assert.equal(index, 1);
-});
-
-test('snippet matching ignores case', () => {
-  const index = findSearchTargetIndex(transcript, { snippet: 'DEPLOYMENT PIPELINES' });
-  assert.equal(index, 2);
-});
-
-test('the sidebar ellipsis wrapper is stripped before matching', () => {
-  const index = findSearchTargetIndex(transcript, { snippet: '...database indexing...' });
-  assert.equal(index, 0);
+test('a snippet finds the message containing it, ignoring case and the sidebar ellipsis wrapper', () => {
+  const rows: Array<[string, string, number]> = [
+    ['plain snippet', 'caching strategies', 1],
+    ['ignores case', 'DEPLOYMENT PIPELINES', 2],
+    ['sidebar ellipsis wrapper is stripped', '...database indexing...', 0],
+  ];
+  for (const [label, snippet, expected] of rows) {
+    assert.equal(findSearchTargetIndex(transcript, { snippet }), expected, label);
+  }
 });
 
 test('a snippet that matches nothing reports a miss instead of guessing', () => {

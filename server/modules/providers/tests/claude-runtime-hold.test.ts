@@ -319,7 +319,7 @@ test('a turn whose tool emits no task events still holds on the static rule', as
 });
 
 
-test('replacement keeps tasks tracked until the stubborn owned process exits', { skip: process.platform !== 'linux' }, async () => {
+test('replacement keeps tasks tracked until the stubborn owned process exits', { skip: process.platform !== 'linux', timeout: 20_000 }, async () => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'claude-replacement-'));
   const first = createScriptedQuery();
   const second = createScriptedQuery();

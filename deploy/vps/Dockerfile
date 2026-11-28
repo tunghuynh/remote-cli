@@ -51,8 +51,9 @@ FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 # git: used by the project/git features of the UI; ca-certificates: outbound TLS;
 # ripgrep: session search (node_modules/@vscode/ripgrep/bin/rg links to /usr/bin/rg).
 # curl & claude-code: used by Claude Code CLI execution.
+# procps: `ps` feeds the agent monitor process list; openssh-client: git over ssh URLs.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates ripgrep curl \
+ && apt-get install -y --no-install-recommends git ca-certificates ripgrep curl procps openssh-client \
  && npm install -g @anthropic-ai/claude-code \
  && rm -rf /var/lib/apt/lists/*
 

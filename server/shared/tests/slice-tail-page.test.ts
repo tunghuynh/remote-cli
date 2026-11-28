@@ -5,22 +5,17 @@ import { sliceTailPage } from '@/shared/utils.js';
 
 const ITEMS = ['a', 'b', 'c', 'd', 'e'];
 
-test('offset 0 returns the most recent page', () => {
-  const { page, hasMore } = sliceTailPage(ITEMS, 2, 0);
-  assert.deepEqual(page, ['d', 'e']);
-  assert.equal(hasMore, true);
-});
-
-test('increasing offsets walk backwards in time', () => {
-  const { page, hasMore } = sliceTailPage(ITEMS, 2, 2);
-  assert.deepEqual(page, ['b', 'c']);
-  assert.equal(hasMore, true);
-});
-
-test('the oldest page reports hasMore false', () => {
-  const { page, hasMore } = sliceTailPage(ITEMS, 2, 4);
-  assert.deepEqual(page, ['a']);
-  assert.equal(hasMore, false);
+test('pages walk backwards from the most recent to the oldest, and only the oldest reports hasMore false', () => {
+  const rows: Array<[string, number, string[], boolean]> = [
+    ['offset 0 returns the most recent page', 0, ['d', 'e'], true],
+    ['increasing offsets walk backwards in time', 2, ['b', 'c'], true],
+    ['the oldest page reports hasMore false', 4, ['a'], false],
+  ];
+  for (const [label, offset, expectedPage, expectedHasMore] of rows) {
+    const { page, hasMore } = sliceTailPage(ITEMS, 2, offset);
+    assert.deepEqual(page, expectedPage, label);
+    assert.equal(hasMore, expectedHasMore, label);
+  }
 });
 
 test('null limit returns everything', () => {

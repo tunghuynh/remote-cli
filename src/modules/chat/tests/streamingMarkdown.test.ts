@@ -1,3 +1,4 @@
+// @vitest-environment node
 import assert from 'node:assert/strict';
 
 import { test } from 'vitest';
@@ -34,12 +35,18 @@ test('a completed paragraph settles and the partial one stays pending', () => {
   assertLossless(content);
 });
 
-test('the boundary advances to the last completed block', () => {
-  const content = 'One.\n\nTwo.\n\nThree partial';
-  const { settled, pending } = splitStreamingMarkdown(content);
-
-  assert.equal(settled, 'One.\n\nTwo.\n\n');
-  assert.equal(pending, 'Three partial');
+test('a completed block settles and the rest stays pending: paragraphs, closed fences, headings, exact boundaries', () => {
+  const rows: Array<[string, string, string, string]> = [
+    ['the boundary advances to the last completed block', 'One.\n\nTwo.\n\nThree partial', 'One.\n\nTwo.\n\n', 'Three partial'],
+    ['a closed code fence can be settled', '```ts\nconst a = 1;\n```\n\nAfter the block', '```ts\nconst a = 1;\n```\n\n', 'After the block'],
+    ['a heading is a safe boundary', '# Title\n\nBody text still coming', '# Title\n\n', 'Body text still coming'],
+    ['content ending exactly on a boundary leaves nothing pending', 'Done.\n\n', 'Done.\n\n', ''],
+  ];
+  for (const [label, content, settled, pending] of rows) {
+    const result = splitStreamingMarkdown(content);
+    assert.equal(result.settled, settled, label);
+    assert.equal(result.pending, pending, label);
+  }
 });
 
 test('an unterminated code fence keeps the whole block pending', () => {
@@ -51,14 +58,6 @@ test('an unterminated code fence keeps the whole block pending', () => {
   assertLossless(content);
 });
 
-test('a closed code fence can be settled', () => {
-  const content = '```ts\nconst a = 1;\n```\n\nAfter the block';
-  const { settled, pending } = splitStreamingMarkdown(content);
-
-  assert.equal(settled, '```ts\nconst a = 1;\n```\n\n');
-  assert.equal(pending, 'After the block');
-});
-
 test('a blank line inside a loose list is not a boundary', () => {
   // Splitting here would restart the numbering at 1 in the second half.
   const content = '1. first\n\n2. second\n\n3. third partial';
@@ -67,19 +66,15 @@ test('a blank line inside a loose list is not a boundary', () => {
   assert.equal(settled, '', 'must never split a list');
 });
 
-test('a blank line between bullet items is not a boundary', () => {
-  const content = '- alpha\n\n- beta\n\n- gamma partial';
-  assert.equal(splitStreamingMarkdown(content).settled, '');
-});
-
-test('a blank line adjacent to a blockquote is not a boundary', () => {
-  const content = '> quoted line\n\n> continued quote partial';
-  assert.equal(splitStreamingMarkdown(content).settled, '');
-});
-
-test('a blank line adjacent to a table is not a boundary', () => {
-  const content = '| a | b |\n| - | - |\n\n| 1 | 2 |';
-  assert.equal(splitStreamingMarkdown(content).settled, '');
+test('a blank line inside a bullet list, blockquote or table is not a boundary', () => {
+  const rows: Array<[string, string]> = [
+    ['between bullet items', '- alpha\n\n- beta\n\n- gamma partial'],
+    ['adjacent to a blockquote', '> quoted line\n\n> continued quote partial'],
+    ['adjacent to a table', '| a | b |\n| - | - |\n\n| 1 | 2 |'],
+  ];
+  for (const [label, content] of rows) {
+    assert.equal(splitStreamingMarkdown(content).settled, '', label);
+  }
 });
 
 test('a paragraph before a list settles without splitting the list', () => {
@@ -88,22 +83,6 @@ test('a paragraph before a list settles without splitting the list', () => {
 
   assert.equal(settled, '', 'the list start is context-sensitive, so no split yet');
   assert.equal(pending, content);
-});
-
-test('a heading is a safe boundary', () => {
-  const content = '# Title\n\nBody text still coming';
-  const { settled, pending } = splitStreamingMarkdown(content);
-
-  assert.equal(settled, '# Title\n\n');
-  assert.equal(pending, 'Body text still coming');
-});
-
-test('content ending exactly on a boundary leaves nothing pending', () => {
-  const content = 'Done.\n\n';
-  const { settled, pending } = splitStreamingMarkdown(content);
-
-  assert.equal(settled, 'Done.\n\n');
-  assert.equal(pending, '');
 });
 
 test('the settled prefix only grows as more of the reply arrives', () => {

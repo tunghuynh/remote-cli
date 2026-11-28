@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from 'vitest';
 
 import { isMonitorSnapshot, MonitorApiError, readMonitorJson } from '@/modules/agent-monitor/data/readMonitorJson';

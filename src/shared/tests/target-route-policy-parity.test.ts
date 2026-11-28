@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * The tab's mirror of the Host's deny list (`target-route-policy.ts`) must not drift from the real table
  * (`server/modules/remote/policy/route-rules.ts`, pure data). The server is authoritative; the mirror only saves
