@@ -181,7 +181,7 @@ export const sessionDraftsDb = {
   },
 
   /**
-   * Restores a claim lost to the narrow race where another run starts first.
+   * Restores a claim when a queued turn could not start.
    *
    * A message the user queued after the claim stays queued behind the restored
    * one rather than being overwritten by it, so neither is lost and the order
@@ -200,7 +200,7 @@ export const sessionDraftsDb = {
         candidate.userId,
         candidate.sessionId,
         queuedSinceClaim
-          ? JSON.stringify(mergeQueuedMessages(restored, queuedSinceClaim.message))
+          ? JSON.stringify({ ...mergeQueuedMessages(restored, queuedSinceClaim.message), ...(restored.failure ? { failure: restored.failure } : {}) })
           : candidate.claimToken,
         queuedSinceClaim ? mergeOrigins(candidate.origin, queuedSinceClaim.origin) : candidate.origin,
       );

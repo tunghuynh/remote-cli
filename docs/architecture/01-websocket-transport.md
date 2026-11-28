@@ -660,3 +660,29 @@ with 1008 (`:47-50`); the client then sends one `register` frame carrying `devic
 Related: [the realtime stream](./02-realtime-stream.md) for what the frames become,
 [conversation handoff](./03-conversation-handoff.md) for the ids they carry,
 [the index](./README.md) for the rest of the set.
+
+
+### Queued turns and external CLI activity
+
+If a queued session has an app run, background work, or a busy Claude CLI registry
+entry, its queued message stays in the database. The dispatcher uses the same
+running-session definition as the chat UI. It rechecks that definition immediately
+before reserving a detached queued turn. This also covers a CLI still reporting busy
+after an app run has completed; it does not change how the app marks that run complete.
+
+If startup is refused or throws before the detached turn is admitted, the dispatcher
+restores the message with its last failure reason and logs the refusal. A newer queued
+follow-up is appended after the restored message, preserving attachment order and the
+more restrictive origin. The QUEUED card shows the reason; the next 30-second scan can
+retry, and editing or deleting the card still works. A turn that was admitted and then
+failed in the provider is not automatically replayed, since replay could duplicate work.
+
+The scan does not wait for other sessions' turns to finish. Per-session guards and
+atomic claims prevent duplicate queued dispatch; scheduled turns serialize within each
+session across scans. Schedules retain their explicit interruptActiveRun behavior.
+Active chat draft reconciliation continues after a card disappears, so a later startup
+failure can restore its card. The Stop button and Send anyway dialog are unchanged.
+
+The CLI registry is an observation, not a lock shared with external terminals. The
+last check prevents dispatch while the registry reports busy, but cannot stop a separate
+terminal from starting a turn after that check. No cross-process lease is introduced.

@@ -1,8 +1,8 @@
 import path from 'node:path';
 
 import type { WebSocket } from 'ws';
-import { getSessionRuntime } from '@/modules/auth/index.js';
 
+import { getSessionRuntime } from '@/modules/auth/index.js';
 import { sessionsDb } from '@/modules/database/index.js';
 import { providerModelsService, sessionsService } from '@/modules/providers/index.js';
 import { chatRunRegistry } from '@/modules/websocket/services/chat-run-registry.service.js';
@@ -722,6 +722,8 @@ export async function runDetachedChatTurn(
      * land mid-run, so the timer outranks whatever is running.
      */
     interruptActiveRun?: boolean;
+    /** Queued turns recheck CLI/background activity immediately before reserving a run. */
+    requireIdle?: boolean;
   },
   dependencies: ChatWebSocketDependencies,
 ): Promise<{ started: boolean; error: string | null }> {
@@ -750,6 +752,11 @@ export async function runDetachedChatTurn(
       exitCode: aborted ? 0 : 1,
       aborted: true,
     });
+  }
+
+  if (input.requireIdle && (dependencies.runtime.hasBackgroundWork(input.sessionId)
+    || (await sessionsService.listRunningSessions()).some((entry) => entry.sessionId === input.sessionId))) {
+    return { started: false, error: 'The session is still busy; the queued turn will retry.' };
   }
 
   return dispatchRun(

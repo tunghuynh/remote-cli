@@ -145,6 +145,7 @@ const restoreQueuedDraft = (sessionKey: string): QueuedDraft | null => {
   return saved
     ? {
         content: saved.content,
+        failure: saved.failure,
         attachments: [],
         uploadedAttachments: saved.attachments ?? saved.images,
         options: saved.options,
@@ -156,6 +157,7 @@ const restoreQueuedDraft = (sessionKey: string): QueuedDraft | null => {
 // not compared: the card does not show them.
 const showsQueuedMessage = (card: QueuedDraft, stored: QueuedDraft): boolean => (
   card.content === stored.content
+  && card.failure === stored.failure
   && JSON.stringify(card.uploadedAttachments ?? []) === JSON.stringify(stored.uploadedAttachments ?? [])
 );
 
@@ -801,6 +803,7 @@ export function useChatComposerState({
           appendedToEarlierMessage = appended;
           queuedCard = {
             content: queuedMessage.content,
+            failure: queuedMessage.failure,
             attachments: durableDraft.attachments,
             uploadedAttachments: queuedMessage.attachments,
             options: queuedMessage.options,
@@ -1192,11 +1195,10 @@ export function useChatComposerState({
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
 
-  // The VPS dispatcher owns sending. While the card is visible, periodically
-  // reconcile it with the server, so the UI notices when the server claims it
-  // or another tab adds to it.
+  // The dispatcher owns sending. Reconcile the active session even after a
+  // claim removes its card: a failed startup can restore the message later.
   useEffect(() => {
-    if (!sessionKey || !queuedDraft) {
+    if (!sessionKey) {
       return;
     }
     let cancelled = false;
@@ -1211,9 +1213,8 @@ export function useChatComposerState({
       const stored = cancelled ? null : restoreQueuedDraft(sessionKey);
       if (stored) {
         setQueuedDraft((card) => {
-          if (!card || showsQueuedMessage(card, stored)) {
-            return card;
-          }
+          if (!card) return stored;
+          if (showsQueuedMessage(card, stored)) return card;
           // This tab's browser files stay with its part of the message, so
           // editing the card still brings them back into the composer.
           return extendsQueuedMessage(card, stored) ? { ...stored, attachments: card.attachments } : stored;
@@ -1238,7 +1239,7 @@ export function useChatComposerState({
       clearInterval(timer);
       document.removeEventListener('visibilitychange', reconcileWhenShown);
     };
-  }, [queuedDraft, sessionKey]);
+  }, [sessionKey]);
 
   // Editing or deleting the card takes the message off the server's queue at
   // once, before the dispatcher's next poll can send it.

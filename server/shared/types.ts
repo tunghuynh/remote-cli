@@ -990,6 +990,8 @@ export type CreateCredentialResult = {
  */
 export type QueuedChatMessage = {
   content: string;
+  /** Last startup failure, retained with the queued message until retry or edit. */
+  failure?: string;
   options?: Record<string, unknown>;
   attachments: unknown[];
 };

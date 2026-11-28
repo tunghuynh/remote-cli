@@ -25,6 +25,8 @@ import type { QueuedSendOptions } from '@/shared/types';
 
 /** A queued message as it is stored: text plus the send options it was composed under. */
 export type StoredQueuedMessage = {
+  /** Last startup failure retained by the server while this message waits for retry. */
+  failure?: string;
   content: string;
   options?: QueuedSendOptions;
   /** Legacy image-only descriptors retained for queued draft compatibility. */

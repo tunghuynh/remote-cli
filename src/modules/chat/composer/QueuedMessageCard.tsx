@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronUp, PencilIcon, XIcon } from 'lucide-react';
+
 import { cn } from '@/shared/utils';
 
 type QueuedMessageCardProps = {
   content: string;
+  failure?: string;
   attachmentCount?: number;
   onEdit: () => void;
   onDelete: () => void;
@@ -17,6 +19,7 @@ type QueuedMessageCardProps = {
  */
 export default function QueuedMessageCard({
   content,
+  failure,
   attachmentCount = 0,
   onEdit,
   onDelete,
@@ -58,6 +61,7 @@ export default function QueuedMessageCard({
           >
             {content}
           </p>
+          {failure && <p role="status" className="mt-1 break-words text-xs text-destructive">{failure}</p>}
           {attachmentCount > 0 && (
             <p className="mt-0.5 text-xs text-muted-foreground">
               {attachmentCount} {attachmentCount === 1 ? 'file' : 'files'} attached

@@ -5,11 +5,12 @@ import { afterEach, beforeEach, test, vi } from 'vitest';
 
 import { i18n } from '@/modules/i18n';
 import { useChatComposerState } from '@/modules/chat/hooks/useChatComposerState';
+import type * as SharedConstants from '@/shared/constants';
 import { readDraftText, resetChatDrafts, writeDraftText } from '@/shared/chatDrafts';
 import type { BackgroundSendChoice, ChatMessage, PermissionMode, Project, ProjectSession, SessionActivityMap } from '@/shared/types';
 
 vi.mock('@/shared/constants', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/shared/constants')>()),
+  ...(await importOriginal<typeof SharedConstants>()),
   QUEUED_DRAFT_RECONCILE_INTERVAL_MS: 300,
 }));
 
@@ -25,7 +26,7 @@ vi.mock('@/shared/constants', async (importOriginal) => ({
  * the card renders.
  */
 
-type StoredQueued = { content: string; options?: Record<string, unknown>; attachments: unknown[] };
+type StoredQueued = { failure?: string; content: string; options?: Record<string, unknown>; attachments: unknown[] };
 type StoredDraft = { text: string; queuedMessage: StoredQueued | null };
 
 const PROJECT: Project = { projectId: 'project-1', displayName: 'Project One', fullPath: '/tmp/project-one' };
@@ -703,4 +704,19 @@ test('a session switch during the upload keeps a draft that changed in the sessi
 
   assert.equal(queuedOnServer('session-1')?.content, 'follow-up B');
   assert.equal(readDraftText('session-1'), 'written on the laptop');
+});
+
+
+test('a startup failure restores the card even after a poll saw the claim remove it', async () => {
+  const { view } = render();
+  await submit(view, 'retained after startup failure');
+  dispatcherClaims('session-1');
+  await waitFor(() => assert.equal(view.result.current.queuedDraft, null));
+  server.set('session-1', { text: '', queuedMessage: {
+    content: 'retained after startup failure', attachments: [], failure: 'Provider is unavailable.',
+  } });
+  await waitFor(() => assert.equal(view.result.current.queuedDraft?.failure, 'Provider is unavailable.'));
+  assert.equal(view.result.current.queuedDraft?.content, 'retained after startup failure');
+  server.get('session-1')!.queuedMessage!.failure = 'Still waiting to start.';
+  await waitFor(() => assert.equal(view.result.current.queuedDraft?.failure, 'Still waiting to start.'));
 });

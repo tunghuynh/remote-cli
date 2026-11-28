@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 import { closeConnection, initializeDatabase, scheduledMessagesDb, sessionDraftsDb, sessionsDb, userDb } from '@/modules/database/index.js';
-import { dispatchDueScheduledMessages, dispatchQueuedMessages } from '@/modules/scheduled-messages/services/scheduled-message-dispatcher.service.js';
+import { dispatchDueScheduledMessages, dispatchQueuedMessages, initializeScheduledMessageDispatcher, closeScheduledMessageDispatcher } from '@/modules/scheduled-messages/services/scheduled-message-dispatcher.service.js';
 import { scheduledMessagesService } from '@/modules/scheduled-messages/services/scheduled-messages.service.js';
+import { sessionsService } from '@/modules/providers/index.js';
 import { chatRunRegistry, connectedClients } from '@/modules/websocket/index.js';
 
 const SESSION_ID = 'scheduled-session';
@@ -667,5 +668,168 @@ test('POST /api/scheduled-messages stores the origin of the request authenticati
       const row = scheduledMessagesDb.listForSession(userId, SESSION_ID).find((candidate) => candidate.content === `from ${authKind}`);
       assert.equal(row?.origin, expected, String(authKind));
     }
+  });
+});
+
+
+test('a queued turn waits for the CLI registry even without an app run or background tasks', async (t) => {
+  await withIsolatedDatabase(async (userId) => {
+    let busy = true;
+    t.mock.method(sessionsService, 'listRunningSessions', async () => busy ? [{ sessionId: SESSION_ID, canInterrupt: false }] : []);
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'wait for external CLI', attachments: [] }, 'remote');
+    const runs: RunCall[] = [];
+    assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 0);
+    assert.equal(sessionDraftsDb.listQueuedMessages().length, 1);
+    busy = false;
+    assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 1);
+    assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 0);
+    assert.equal(runs.length, 1);
+  });
+});
+
+test('an unavailable provider retains the queued message and records why it could not start', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'keep me', attachments: [] }, 'remote');
+    const runtime = { hasRuntime: () => false, hasBackgroundWork: () => false } as never;
+    await dispatchQueuedMessages(runtime);
+    const queued = sessionDraftsDb.getDrafts(userId)[0]?.queuedMessage as { content: string; failure?: string };
+    assert.equal(queued?.content, 'keep me');
+    assert.match(queued.failure ?? '', /not available/);
+  });
+});
+
+test('a lost run-reservation race retains the message regardless of the is/was error wording', async (t) => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'keep after race', attachments: [] }, 'local');
+    t.mock.method(chatRunRegistry, 'startRun', () => null);
+    await dispatchQueuedMessages(createRuntime([]));
+    const queued = sessionDraftsDb.getDrafts(userId)[0]?.queuedMessage as { content: string; failure?: string };
+    assert.equal(queued?.content, 'keep after race');
+    assert.match(queued.failure ?? '', /already in progress/);
+    assert.equal(sessionDraftsDb.listQueuedMessages()[0].origin, 'local');
+  });
+});
+
+test('an exception before startup restores the queued message', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'keep after exception', attachments: [] }, 'remote');
+    const runtime = { hasRuntime: () => { throw new Error('startup unavailable'); }, hasBackgroundWork: () => false } as never;
+    await dispatchQueuedMessages(runtime);
+    const queued = sessionDraftsDb.getDrafts(userId)[0]?.queuedMessage as { content: string; failure?: string };
+    assert.equal(queued?.content, 'keep after exception');
+    assert.match(queued.failure ?? '', /startup unavailable/);
+  });
+});
+
+
+test('a later poll dispatches another session while the first queued turn is still running', async (t) => {
+  await withIsolatedDatabase(async (userId) => {
+    const runs: string[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const runtime = { hasRuntime: () => true, hasBackgroundWork: () => false,
+      run: async (_provider: string, content: string) => { runs.push(content); if (content === 'long A') await held; },
+      abort: async () => true,
+    } as never;
+    const originalSetInterval = globalThis.setInterval;
+    let poll!: () => void;
+    t.mock.method(globalThis, 'setInterval', (callback: () => void) => {
+      poll = callback;
+      return originalSetInterval(callback, 3_600_000);
+    });
+    const waitFor = async (content: string) => {
+      for (let attempt = 0; attempt < 100 && !runs.includes(content); attempt++) await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.ok(runs.includes(content), content + ' should have started');
+    };
+    sessionsDb.createAppSession('other-queued-session', 'claude', '/tmp/project', 'Other');
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'long A', attachments: [] }, 'remote');
+    try {
+      initializeScheduledMessageDispatcher(runtime);
+      await waitFor('long A');
+      sessionDraftsDb.appendQueuedMessage(userId, 'other-queued-session', { content: 'ready B', attachments: [] }, 'remote');
+      poll();
+      await waitFor('ready B');
+      poll();
+      assert.equal(runs.filter((content) => content === 'long A').length, 1);
+      assert.equal(runs.filter((content) => content === 'ready B').length, 1);
+    } finally {
+      closeScheduledMessageDispatcher(); release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  });
+});
+
+
+test('a CLI becoming busy after the scan is rechecked before the queued turn starts', async (t) => {
+  await withIsolatedDatabase(async (userId) => {
+    let reads = 0;
+    t.mock.method(sessionsService, 'listRunningSessions', async () => ++reads === 1 ? [] : [{ sessionId: SESSION_ID }]);
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'do not race the CLI', attachments: [] }, 'remote');
+    const runs: RunCall[] = [];
+    await dispatchQueuedMessages(createRuntime(runs));
+    assert.equal(runs.length, 0);
+    assert.equal(sessionDraftsDb.listQueuedMessages().length, 1);
+  });
+});
+
+test('a failed startup preserves a newer queued follow-up and the failure reason', async () => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'first', attachments: [] }, 'local');
+    const runtime = { hasBackgroundWork: () => false, hasRuntime: () => {
+      sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'second', attachments: [] }, 'remote');
+      return false;
+    } } as never;
+    await dispatchQueuedMessages(runtime);
+    const queued = sessionDraftsDb.getDrafts(userId)[0]?.queuedMessage as { content: string; failure?: string };
+    assert.equal(queued.content, 'first\n\nsecond');
+    assert.match(queued.failure ?? '', /not available/);
+    assert.equal(sessionDraftsDb.listQueuedMessages()[0].origin, 'remote');
+  });
+});
+
+
+test('a missing session retains its queued turn with a reason', async (t) => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'session was removed', attachments: [] }, 'remote');
+    t.mock.method(sessionsDb, 'getSessionById', () => null);
+    await dispatchQueuedMessages(createRuntime([]));
+    const queued = sessionDraftsDb.getDrafts(userId)[0]?.queuedMessage as { content: string; failure?: string };
+    assert.equal(queued?.content, 'session was removed');
+    assert.match(queued.failure ?? '', /no longer exists/);
+  });
+});
+
+test('an invalid agent snapshot retains its queued turn with a reason', async (t) => {
+  await withIsolatedDatabase(async (userId) => {
+    sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'fix agent then retry', attachments: [] }, 'remote');
+    t.mock.method(sessionsDb, 'getAgentSnapshot', () => { throw new Error('agent snapshot invalid'); });
+    await dispatchQueuedMessages(createRuntime([]));
+    const queued = sessionDraftsDb.getDrafts(userId)[0]?.queuedMessage as { content: string; failure?: string };
+    assert.equal(queued?.content, 'fix agent then retry');
+    assert.match(queued.failure ?? '', /snapshot invalid/);
+  });
+});
+
+
+test('the real CLI registry keeps a queued turn until its busy record becomes idle', async (t) => {
+  await withIsolatedDatabase(async (userId) => {
+    const home = await mkdtemp(path.join(tmpdir(), 'queue-cli-registry-'));
+    try {
+      await mkdir(path.join(home, '.claude', 'sessions'), { recursive: true });
+      t.mock.method(os, 'homedir', () => home);
+      sessionsDb.assignProviderSessionId(SESSION_ID, 'queued-native-session');
+      const file = path.join(home, '.claude', 'sessions', `${process.pid}.json`);
+      const record = { pid: process.pid, sessionId: 'queued-native-session', status: 'busy', entrypoint: 'cli', startedAt: Date.now() };
+      await writeFile(file, JSON.stringify(record));
+      sessionDraftsDb.appendQueuedMessage(userId, SESSION_ID, { content: 'wait for CLI registry', attachments: [] }, 'remote');
+      const runs: RunCall[] = [];
+      assert.equal(chatRunRegistry.isProcessing(SESSION_ID), false);
+      assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 0);
+      assert.equal(sessionDraftsDb.listQueuedMessages().length, 1);
+      await writeFile(file, JSON.stringify({ ...record, status: 'idle' }));
+      assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 1);
+      assert.equal(await dispatchQueuedMessages(createRuntime(runs)), 0);
+      assert.equal(runs.length, 1);
+    } finally { await rm(home, { recursive: true, force: true }); }
   });
 });
